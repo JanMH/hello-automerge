@@ -16,12 +16,14 @@ use autosurgeon::{hydrate, reconcile, Hydrate, Reconcile};
 use crate::{receive_bytes, send_n_bytes};
 
 #[derive(Debug, Clone, Reconcile, Hydrate, PartialEq)]
-struct Contact {
+struct Config {
     name: String,
+
 }
 
 pub fn client(port: u16) {
     let mut c = Client::connect(&format!("127.0.0.1:{}", port)).unwrap();
+
 
     let stdin = std::io::stdin(); // We get `Stdin` here.
     loop {
@@ -43,7 +45,7 @@ pub fn client(port: u16) {
 }
 
 fn get_data(c: &mut Client) {
-    let contact: Result<Contact, _> = c.hydrate();
+    let contact: Result<Config, _> = c.hydrate();
     match contact {
         Ok(contact) => {
             println!("{:?}", &contact)
@@ -58,7 +60,7 @@ fn set_data(c: &mut Client) {
     let mut buf = String::new();
     std::io::stdin().read_line(&mut buf).unwrap();
 
-    let contact = Contact { name: buf };
+    let contact = Config { name: buf };
     c.reconcile(contact).unwrap();
     c.upload_local_changes().unwrap();
 }
