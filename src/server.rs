@@ -1,14 +1,13 @@
 use std::{
-    io::{Read, Write},
     net::{TcpListener, TcpStream},
-    sync::{mpsc::{self, Receiver, Sender}, Arc, Mutex},
-    thread, ops::DerefMut,
+    sync::mpsc::{self, Receiver, Sender},
+    thread,
 };
 
 use anyhow::Result;
 use automerge::{
     sync::{self, Message, State, SyncDoc},
-    AutoCommit, Automerge,
+    AutoCommit, PatchLog,
 };
 
 use crate::{receive_bytes, send_n_bytes};
@@ -21,9 +20,12 @@ fn handle_connection(
     let mut buffer = vec![];
     loop {
         receive_bytes(&mut stream, &mut buffer)?;
+        let message = Message::decode(&buffer)?;
+        sender.send(BroadcasterAction::MessageReceived {
+            message,
+            source_index: index,
+        })?;
     }
-
-    Ok(())
 }
 
 enum BroadcasterAction {
@@ -42,12 +44,13 @@ struct Broadcaster {
 }
 
 impl Broadcaster {
-    fn new_client(&mut self, mut stream: TcpStream) -> Result<()> {
+    fn new_client(&mut self, stream: TcpStream) -> Result<()> {
         self.writer_streams.push(stream.try_clone()?);
         self.sync_states.push(sync::State::new());
         let id = self.sync_states.len() - 1;
 
         let cloned = self.sender.clone();
+        self.sync_client(id)?;
 
         thread::spawn(move || {
             let result = handle_connection(stream, cloned, id);
@@ -57,9 +60,16 @@ impl Broadcaster {
     }
 
     fn message_received(&mut self, message: Message, source_index: usize) {
+        let mut patch_log = PatchLog::new(true, automerge::patches::TextRepresentation::String);
         self.doc
             .sync()
-            .receive_sync_message(&mut self.sync_states[source_index], message);
+            .receive_sync_message_log_patches(
+                &mut self.sync_states[source_index],
+                message,
+                &mut patch_log,
+            )
+            .unwrap();
+        println!("Received message with patches {:?}", patch_log);
         for id in 0..self.sync_states.len() {
             let r = self.sync_client(id);
             if let Err(err) = r {
@@ -101,7 +111,7 @@ fn work_loop(work_queue: Receiver<BroadcasterAction>, broadcaster: &mut Broadcas
 }
 
 pub fn server(port: u16) -> Result<()> {
-    let mut listener = TcpListener::bind(("127.0.0.1", port))?;
+    let listener = TcpListener::bind(("127.0.0.1", port))?;
     let (tx, rx) = mpsc::channel();
     let new_client_sender = tx.clone();
 
